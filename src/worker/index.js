@@ -574,6 +574,125 @@ const handlePatchItem = async (request, env, itemId) => {
   return json({ item: next });
 };
 
+const authorizeItemWrite = async (env, user, item) => {
+  if (!item) {
+    return null;
+  }
+
+  if (item.owner_user_id === user.id) {
+    return true;
+  }
+
+  if (!item.household_id) {
+    return false;
+  }
+
+  if (!env.getHouseholdMembership) {
+    return false;
+  }
+
+  const membership = await env.getHouseholdMembership(item.household_id, user.id);
+  return Boolean(membership);
+};
+
+const parseDateOnly = (value, fallback) => {
+  if (!value) {
+    return fallback;
+  }
+
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return value;
+};
+
+const handleCompleteOccurrence = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const itemId = body?.item_id;
+  const occurredOn = parseDateOnly(body?.date);
+  if (!itemId || !occurredOn) {
+    return badRequest("item_id and date are required");
+  }
+
+  if (
+    typeof env.getItemById !== "function" ||
+    typeof env.createOccurrenceCompletion !== "function" ||
+    typeof env.getOccurrenceCompletion !== "function"
+  ) {
+    return json({ error: "unavailable", message: "completion store unavailable" }, { status: 503 });
+  }
+
+  const item = await env.getItemById(itemId);
+  if (!item) {
+    return notFound();
+  }
+
+  const canWrite = await authorizeItemWrite(env, userContext.user, item);
+  if (!canWrite) {
+    return forbidden("item access denied");
+  }
+
+  const existing = await env.getOccurrenceCompletion(itemId, occurredOn);
+  if (existing) {
+    return json({ completion: existing }, { status: 200 });
+  }
+
+  const completion = await env.createOccurrenceCompletion({
+    item_id: itemId,
+    occurred_on: occurredOn,
+    completed_at: new Date().toISOString(),
+    user_id: userContext.user.id,
+  });
+  return json({ completion }, { status: 201 });
+};
+
+const handleUncompleteOccurrence = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const itemId = body?.item_id;
+  const occurredOn = parseDateOnly(body?.date);
+  if (!itemId || !occurredOn) {
+    return badRequest("item_id and date are required");
+  }
+
+  if (
+    typeof env.getItemById !== "function" ||
+    typeof env.deleteOccurrenceCompletion !== "function" ||
+    typeof env.getOccurrenceCompletion !== "function"
+  ) {
+    return json({ error: "unavailable", message: "completion store unavailable" }, { status: 503 });
+  }
+
+  const item = await env.getItemById(itemId);
+  if (!item) {
+    return notFound();
+  }
+
+  const canWrite = await authorizeItemWrite(env, userContext.user, item);
+  if (!canWrite) {
+    return forbidden("item access denied");
+  }
+
+  const existing = await env.getOccurrenceCompletion(itemId, occurredOn);
+  if (!existing) {
+    return json({ completion: null });
+  }
+
+  await env.deleteOccurrenceCompletion(itemId, occurredOn);
+  return json({ completion: null });
+};
+
 const handleGetAgenda = async (request, env) => {
   const userContext = await requireUserContext(request, env);
   if (userContext.response) {
@@ -746,6 +865,12 @@ export default {
     }
     if (url.pathname === "/week" && request.method === "GET") {
       return handleGetWeek(request, env);
+    }
+    if (url.pathname === "/occurrences/complete" && request.method === "POST") {
+      return handleCompleteOccurrence(request, env);
+    }
+    if (url.pathname === "/occurrences/uncomplete" && request.method === "POST") {
+      return handleUncompleteOccurrence(request, env);
     }
 
     return notFound();
