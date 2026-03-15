@@ -38,6 +38,42 @@ const forbidden = (message) =>
 const conflict = (message) =>
   json({ error: "conflict", message }, { status: 409 });
 
+const enrichErrorResponse = async (response, correlationId) => {
+  if (response.status < 400) {
+    return response;
+  }
+
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    return response;
+  }
+
+  const body = await response.clone().text();
+  let payload;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return response;
+  }
+
+  if (payload && typeof payload === "object" && !payload.correlation_id) {
+    return new Response(
+      JSON.stringify({
+        ...payload,
+        correlation_id: correlationId,
+      }),
+      {
+        status: response.status,
+        headers: {
+          "content-type": "application/json",
+        },
+      },
+    );
+  }
+
+  return response;
+};
+
 const extractBearerToken = (request) => {
   const header = request.headers.get("authorization");
   if (!header) {
@@ -1110,79 +1146,92 @@ const handleRegisterDevice = async (request, env) => {
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
+    const correlationId =
+      request.headers.get("x-correlation-id") || crypto.randomUUID();
 
-    if (url.pathname === "/health" && request.method === "GET") {
-      return json(buildHealthPayload());
-    }
-
-    if (url.pathname === "/session/verify" && request.method === "POST") {
-      return handleSessionVerify(request, env);
-    }
-
-    if (url.pathname === "/me" && request.method === "GET") {
-      return handleGetProfile(request, env);
-    }
-
-    if (url.pathname === "/me" && request.method === "PUT") {
-      return handleUpdateProfile(request, env);
-    }
-
-    if (
-      (url.pathname === "/household" || url.pathname === "/households") &&
-      request.method === "POST"
-    ) {
-      return handleCreateHousehold(request, env);
-    }
-    if (
-      url.pathname === "/household/invites" &&
-      request.method === "POST"
-    ) {
-      return handleCreateInvite(request, env);
-    }
-    if (url.pathname === "/household/join" && request.method === "POST") {
-      return handleJoinHousehold(request, env);
-    }
-    if (url.pathname === "/items" && request.method === "GET") {
-      return handleGetItems(request, env);
-    }
-    if (url.pathname === "/items" && request.method === "POST") {
-      return handleCreateItem(request, env);
-    }
-    if (url.pathname.startsWith("/items/") && request.method === "PATCH") {
-      const itemId = url.pathname.split("/")[2];
-      if (!itemId) {
-        return notFound();
+    try {
+      if (url.pathname === "/health" && request.method === "GET") {
+        return enrichErrorResponse(json(buildHealthPayload()), correlationId);
       }
-      return handlePatchItem(request, env, itemId);
-    }
-    if (url.pathname === "/agenda" && request.method === "GET") {
-      return handleGetAgenda(request, env);
-    }
-    if (url.pathname === "/week" && request.method === "GET") {
-      return handleGetWeek(request, env);
-    }
-    if (url.pathname === "/vacations" && request.method === "GET") {
-      return handleGetVacations(request, env);
-    }
-    if (url.pathname === "/vacations" && request.method === "POST") {
-      return handleCreateVacation(request, env);
-    }
-    if (url.pathname === "/devices/register" && request.method === "POST") {
-      return handleRegisterDevice(request, env);
-    }
-    if (url.pathname === "/reminders/due" && request.method === "GET") {
-      return handleGetDueReminders(request, env);
-    }
-    if (url.pathname === "/reminders/dispatch" && request.method === "POST") {
-      return handleDispatchReminders(request, env);
-    }
-    if (url.pathname === "/occurrences/complete" && request.method === "POST") {
-      return handleCompleteOccurrence(request, env);
-    }
-    if (url.pathname === "/occurrences/uncomplete" && request.method === "POST") {
-      return handleUncompleteOccurrence(request, env);
-    }
 
-    return notFound();
+      if (url.pathname === "/session/verify" && request.method === "POST") {
+        return enrichErrorResponse(await handleSessionVerify(request, env), correlationId);
+      }
+
+      if (url.pathname === "/me" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetProfile(request, env), correlationId);
+      }
+
+      if (url.pathname === "/me" && request.method === "PUT") {
+        return enrichErrorResponse(await handleUpdateProfile(request, env), correlationId);
+      }
+
+      if (
+        (url.pathname === "/household" || url.pathname === "/households") &&
+        request.method === "POST"
+      ) {
+        return enrichErrorResponse(await handleCreateHousehold(request, env), correlationId);
+      }
+      if (
+        url.pathname === "/household/invites" &&
+        request.method === "POST"
+      ) {
+        return enrichErrorResponse(await handleCreateInvite(request, env), correlationId);
+      }
+      if (url.pathname === "/household/join" && request.method === "POST") {
+        return enrichErrorResponse(await handleJoinHousehold(request, env), correlationId);
+      }
+      if (url.pathname === "/items" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetItems(request, env), correlationId);
+      }
+      if (url.pathname === "/items" && request.method === "POST") {
+        return enrichErrorResponse(await handleCreateItem(request, env), correlationId);
+      }
+      if (url.pathname.startsWith("/items/") && request.method === "PATCH") {
+        const itemId = url.pathname.split("/")[2];
+        if (!itemId) {
+          return enrichErrorResponse(notFound(), correlationId);
+        }
+        return enrichErrorResponse(await handlePatchItem(request, env, itemId), correlationId);
+      }
+      if (url.pathname === "/agenda" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetAgenda(request, env), correlationId);
+      }
+      if (url.pathname === "/week" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetWeek(request, env), correlationId);
+      }
+      if (url.pathname === "/vacations" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetVacations(request, env), correlationId);
+      }
+      if (url.pathname === "/vacations" && request.method === "POST") {
+        return enrichErrorResponse(await handleCreateVacation(request, env), correlationId);
+      }
+      if (url.pathname === "/devices/register" && request.method === "POST") {
+        return enrichErrorResponse(await handleRegisterDevice(request, env), correlationId);
+      }
+      if (url.pathname === "/reminders/due" && request.method === "GET") {
+        return enrichErrorResponse(await handleGetDueReminders(request, env), correlationId);
+      }
+      if (url.pathname === "/reminders/dispatch" && request.method === "POST") {
+        return enrichErrorResponse(await handleDispatchReminders(request, env), correlationId);
+      }
+      if (url.pathname === "/occurrences/complete" && request.method === "POST") {
+        return enrichErrorResponse(await handleCompleteOccurrence(request, env), correlationId);
+      }
+      if (url.pathname === "/occurrences/uncomplete" && request.method === "POST") {
+        return enrichErrorResponse(await handleUncompleteOccurrence(request, env), correlationId);
+      }
+
+      return enrichErrorResponse(notFound(), correlationId);
+    } catch {
+      return json(
+        {
+          error: "internal_error",
+          message: "internal error",
+          correlation_id: correlationId,
+        },
+        { status: 500 },
+      );
+    }
   },
 };
