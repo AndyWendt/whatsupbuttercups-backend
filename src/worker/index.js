@@ -451,6 +451,20 @@ const parseDateParam = (url) => {
   return { value: date, error: null };
 };
 
+const parseStartDateParam = (url) => {
+  const date = url.searchParams.get("start");
+  if (!date) {
+    return { value: null, error: badRequest("start query is required") };
+  }
+
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return { value: null, error: badRequest("invalid start date") };
+  }
+
+  return { value: date, error: null };
+};
+
 const requireHouseholdForItem = async (env, user, householdId) => {
   if (!householdId) {
     return { response: null };
@@ -600,6 +614,85 @@ const handleGetAgenda = async (request, env) => {
   });
 };
 
+const toPercent = (completed, expected) => {
+  if (expected === 0) {
+    return 0;
+  }
+
+  return Math.round((completed / expected) * 10000) / 100;
+};
+
+const handleGetWeek = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const url = new URL(request.url);
+  const parsedDate = parseStartDateParam(url);
+  if (parsedDate.error) {
+    return parsedDate.error;
+  }
+
+  if (
+    typeof env.listItemsForUser !== "function" ||
+    typeof env.listCompletionsForUserInRange !== "function"
+  ) {
+    return json({ error: "unavailable", message: "week query unavailable" }, { status: 503 });
+  }
+
+  const weekStart = parsedDate.value;
+  const parsedStart = new Date(`${weekStart}T00:00:00.000Z`);
+  const weekEndDate = new Date(
+    Date.UTC(
+      parsedStart.getUTCFullYear(),
+      parsedStart.getUTCMonth(),
+      parsedStart.getUTCDate() + 6,
+    ),
+  );
+  const weekEnd = weekEndDate.toISOString().slice(0, 10);
+  const items = await env.listItemsForUser(userContext.user.id);
+  const completions = await env.listCompletionsForUserInRange(
+    userContext.user.id,
+    weekStart,
+    weekEnd,
+  );
+
+  const completionLookup = new Set(
+    completions.map((completion) => `${completion.item_id}:${completion.occurred_on}`),
+  );
+  let expectedCount = 0;
+  let completedCount = 0;
+
+  for (const item of items) {
+    if (Number(item.is_active) === 0) {
+      continue;
+    }
+
+    const occurrences = expandRecurrence(
+      item.recurrence,
+      item.created_at?.slice(0, 10) || weekStart,
+      weekEnd,
+    ).filter((date) => date >= weekStart && date <= weekEnd);
+
+    for (const date of occurrences) {
+      const marker = `${item.id}:${date}`;
+      expectedCount += 1;
+      if (completionLookup.has(marker)) {
+        completedCount += 1;
+      }
+    }
+  }
+
+  return json({
+    start: weekStart,
+    end: weekEnd,
+    expected_count: expectedCount,
+    completed_count: completedCount,
+    progress_percent: toPercent(completedCount, expectedCount),
+  });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -650,6 +743,9 @@ export default {
     }
     if (url.pathname === "/agenda" && request.method === "GET") {
       return handleGetAgenda(request, env);
+    }
+    if (url.pathname === "/week" && request.method === "GET") {
+      return handleGetWeek(request, env);
     }
 
     return notFound();
