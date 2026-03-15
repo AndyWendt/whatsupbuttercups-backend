@@ -46,6 +46,16 @@ const makeEnv = () => {
         updated_at: "2026-01-01T00:00:00.000Z",
       },
     ],
+    [
+      "household-2",
+      {
+        id: "household-2",
+        name: "Team",
+        creator_user_id: "user-uid-member",
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
   ]);
   const householdMembers = new Map([
     [
@@ -62,6 +72,14 @@ const makeEnv = () => {
         household_id: "household-1",
         user_id: "user-uid-member",
         role: "member",
+      },
+    ],
+    [
+      "household-2:user-uid-member",
+      {
+        household_id: "household-2",
+        user_id: "user-uid-member",
+        role: "admin",
       },
     ],
   ]);
@@ -165,6 +183,27 @@ describe("POST /household/invites", () => {
     expect(response.status).toBe(403);
     expect(body.error).toBe("forbidden");
   });
+
+  it("rejects cross-household invite creation", async () => {
+    const env = makeEnv();
+    const request = new Request("https://example.test/household/invites", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer member-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        household_id: "household-1",
+        invitee_email: "joiner@example.com",
+      }),
+    });
+
+    const response = await worker.fetch(request, env);
+    const body = await response.json();
+
+    expect(response.status).toBe(403);
+    expect(body.error).toBe("forbidden");
+  });
 });
 
 describe("POST /household/join", () => {
@@ -204,5 +243,51 @@ describe("POST /household/join", () => {
     expect(env.householdMembers.get("household-1:user-uid-joiner")).toMatchObject({
       role: "member",
     });
+  });
+
+  it("requires authorization on join", async () => {
+    const env = makeEnv();
+    const request = new Request("https://example.test/household/join", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token: "does-not-exist" }),
+    });
+
+    const response = await worker.fetch(request, env);
+    const body = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(body.error).toBe("unauthorized");
+  });
+
+  it("rejects reuse of accepted invite", async () => {
+    const env = makeEnv();
+    const token = "invite-2";
+    env.invites.set(token, {
+      token,
+      household_id: "household-1",
+      inviter_user_id: "user-uid-owner",
+      invitee_email: null,
+      status: "accepted",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      accepted_by: "user-uid-owner",
+    });
+
+    const request = new Request("https://example.test/household/join", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer joiner-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+    });
+    const response = await worker.fetch(request, env);
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("conflict");
   });
 });

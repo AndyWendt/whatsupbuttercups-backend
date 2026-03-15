@@ -71,6 +71,49 @@ const writeProfileToEnv = async (env, firebaseUid, updates) => {
   return env.upsertProfile(firebaseUid, updates);
 };
 
+const requireHouseholdMembership = async (env, user, householdId) => {
+  if (typeof env.getHouseholdMembership !== "function") {
+    return {
+      response: json(
+        { error: "unavailable", message: "membership lookup unavailable" },
+        { status: 503 },
+      ),
+    };
+  }
+
+  const membership = await env.getHouseholdMembership(householdId, user.id);
+  if (!membership) {
+    return {
+      response: forbidden("household membership required"),
+      membership: null,
+    };
+  }
+
+  return { response: null, membership };
+};
+
+const requireHouseholdRole = async (env, user, householdId, requiredRole) => {
+  const membershipContext = await requireHouseholdMembership(
+    env,
+    user,
+    householdId,
+  );
+  if (membershipContext.response) {
+    return membershipContext;
+  }
+
+  if (membershipContext.membership.role !== requiredRole) {
+    return {
+      response: forbidden(
+        `household ${requiredRole} role required`,
+      ),
+      membership: membershipContext.membership,
+    };
+  }
+
+  return { response: null, membership: membershipContext.membership };
+};
+
 const profilePayload = ({ id, email, displayName, createdAt, firebaseUid }) => ({
   user: {
     id,
@@ -273,16 +316,7 @@ const handleCreateHousehold = async (request, env) => {
 };
 
 const ensureHouseholdAdmin = async (env, user, householdId) => {
-  if (typeof env.getHouseholdMembership !== "function") {
-    return { response: json({ error: "unavailable", message: "membership lookup unavailable" }, { status: 503 }) };
-  }
-
-  const membership = await env.getHouseholdMembership(householdId, user.id);
-  if (!membership || membership.role !== "admin") {
-    return { response: forbidden("household admin required") };
-  }
-
-  return { response: null, membership };
+  return requireHouseholdRole(env, user, householdId, "admin");
 };
 
 const handleCreateInvite = async (request, env) => {
