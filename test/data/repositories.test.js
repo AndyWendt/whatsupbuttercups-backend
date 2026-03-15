@@ -215,4 +215,29 @@ describe("sqlite repository", () => {
       expect(user).not.toBeNull();
     },
   );
+
+  it("exposes getVacationWindowsForUser alias for reminder workflows", async () => {
+    const db = makeDb();
+    const repo = createRepository(db);
+    const user = await repo.createUser({
+      id: "user-v",
+      firebaseUid: "uid-v",
+      email: "v@example.com",
+    });
+    await repo.createVacationWindow({
+      id: "vac-1",
+      userId: user.id,
+      startsAt: "2026-04-01",
+      endsAt: "2026-04-03",
+      now: "2026-03-01T00:00:00.000Z",
+    });
+
+    const bound = bindRepositoryToEnv({ DB: db });
+    expect(typeof bound.listVacationWindowsForUser).toBe("function");
+    expect(typeof bound.getVacationWindowsForUser).toBe("function");
+
+    const listed = await bound.listVacationWindowsForUser(user.id);
+    const fetched = await bound.getVacationWindowsForUser(user.id);
+    expect(fetched).toEqual(listed);
+  });
 });

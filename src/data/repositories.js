@@ -383,6 +383,14 @@ export const createRepository = (db) => {
       ),
     ),
 
+    getVacationWindowsForUser: async (userId) => normalizeRowList(
+      await executeAll(
+        db,
+        "SELECT * FROM vacation_windows WHERE user_id = ? ORDER BY starts_at ASC",
+        [userId],
+      ),
+    ),
+
     createVacationWindow: async ({ id, userId, startsAt, endsAt, now }) => {
       const createdAt = toDate(now);
       const window = {
