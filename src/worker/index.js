@@ -3,6 +3,7 @@ import { projectWeekProgress } from "../domain/weekProgress.js";
 import { selectDueReminders } from "../domain/reminders.js";
 import { buildReminderPayload } from "../domain/notifications.js";
 import { bindRepositoryToEnv } from "../data/repositories.js";
+import { bindFirebaseServicesToEnv } from "../integrations/firebase.js";
 
 const buildHealthPayload = () => ({
   service: "whatsupbuttercups-backend",
@@ -1149,7 +1150,7 @@ export default {
     const url = new URL(request.url);
     const correlationId =
       request.headers.get("x-correlation-id") || crypto.randomUUID();
-    const requestEnv = bindRepositoryToEnv(env);
+    const requestEnv = bindFirebaseServicesToEnv(bindRepositoryToEnv(env));
 
     try {
       if (url.pathname === "/health" && request.method === "GET") {
