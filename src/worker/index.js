@@ -2,6 +2,7 @@ import { expandRecurrence } from "../domain/recurrence.js";
 import { projectWeekProgress } from "../domain/weekProgress.js";
 import { selectDueReminders } from "../domain/reminders.js";
 import { buildReminderPayload } from "../domain/notifications.js";
+import { bindRepositoryToEnv } from "../data/repositories.js";
 
 const buildHealthPayload = () => ({
   service: "whatsupbuttercups-backend",
@@ -966,7 +967,7 @@ const handleGetDueReminders = async (request, env) => {
     for (const item of items) {
       const last = await env.getLastReminderSentAtForItem(item.id);
       if (last) {
-        lastReminderByItem[item.id] = last.sent_at;
+        lastReminderByItem[item.id] = last.sent_at || last.created_at;
       }
     }
   }
@@ -1031,7 +1032,7 @@ const handleDispatchReminders = async (request, env) => {
     for (const item of items) {
       const last = await env.getLastReminderSentAtForItem(item.id);
       if (last) {
-        lastReminderByItem[item.id] = last.sent_at;
+        lastReminderByItem[item.id] = last.sent_at || last.created_at;
       }
     }
   }
@@ -1148,6 +1149,7 @@ export default {
     const url = new URL(request.url);
     const correlationId =
       request.headers.get("x-correlation-id") || crypto.randomUUID();
+    const requestEnv = bindRepositoryToEnv(env);
 
     try {
       if (url.pathname === "/health" && request.method === "GET") {
@@ -1155,71 +1157,71 @@ export default {
       }
 
       if (url.pathname === "/session/verify" && request.method === "POST") {
-        return enrichErrorResponse(await handleSessionVerify(request, env), correlationId);
+        return enrichErrorResponse(await handleSessionVerify(request, requestEnv), correlationId);
       }
 
       if (url.pathname === "/me" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetProfile(request, env), correlationId);
+        return enrichErrorResponse(await handleGetProfile(request, requestEnv), correlationId);
       }
 
       if (url.pathname === "/me" && request.method === "PUT") {
-        return enrichErrorResponse(await handleUpdateProfile(request, env), correlationId);
+        return enrichErrorResponse(await handleUpdateProfile(request, requestEnv), correlationId);
       }
 
       if (
         (url.pathname === "/household" || url.pathname === "/households") &&
         request.method === "POST"
       ) {
-        return enrichErrorResponse(await handleCreateHousehold(request, env), correlationId);
+        return enrichErrorResponse(await handleCreateHousehold(request, requestEnv), correlationId);
       }
       if (
         url.pathname === "/household/invites" &&
         request.method === "POST"
       ) {
-        return enrichErrorResponse(await handleCreateInvite(request, env), correlationId);
+        return enrichErrorResponse(await handleCreateInvite(request, requestEnv), correlationId);
       }
       if (url.pathname === "/household/join" && request.method === "POST") {
-        return enrichErrorResponse(await handleJoinHousehold(request, env), correlationId);
+        return enrichErrorResponse(await handleJoinHousehold(request, requestEnv), correlationId);
       }
       if (url.pathname === "/items" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetItems(request, env), correlationId);
+        return enrichErrorResponse(await handleGetItems(request, requestEnv), correlationId);
       }
       if (url.pathname === "/items" && request.method === "POST") {
-        return enrichErrorResponse(await handleCreateItem(request, env), correlationId);
+        return enrichErrorResponse(await handleCreateItem(request, requestEnv), correlationId);
       }
       if (url.pathname.startsWith("/items/") && request.method === "PATCH") {
         const itemId = url.pathname.split("/")[2];
         if (!itemId) {
           return enrichErrorResponse(notFound(), correlationId);
         }
-        return enrichErrorResponse(await handlePatchItem(request, env, itemId), correlationId);
+        return enrichErrorResponse(await handlePatchItem(request, requestEnv, itemId), correlationId);
       }
       if (url.pathname === "/agenda" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetAgenda(request, env), correlationId);
+        return enrichErrorResponse(await handleGetAgenda(request, requestEnv), correlationId);
       }
       if (url.pathname === "/week" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetWeek(request, env), correlationId);
+        return enrichErrorResponse(await handleGetWeek(request, requestEnv), correlationId);
       }
       if (url.pathname === "/vacations" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetVacations(request, env), correlationId);
+        return enrichErrorResponse(await handleGetVacations(request, requestEnv), correlationId);
       }
       if (url.pathname === "/vacations" && request.method === "POST") {
-        return enrichErrorResponse(await handleCreateVacation(request, env), correlationId);
+        return enrichErrorResponse(await handleCreateVacation(request, requestEnv), correlationId);
       }
       if (url.pathname === "/devices/register" && request.method === "POST") {
-        return enrichErrorResponse(await handleRegisterDevice(request, env), correlationId);
+        return enrichErrorResponse(await handleRegisterDevice(request, requestEnv), correlationId);
       }
       if (url.pathname === "/reminders/due" && request.method === "GET") {
-        return enrichErrorResponse(await handleGetDueReminders(request, env), correlationId);
+        return enrichErrorResponse(await handleGetDueReminders(request, requestEnv), correlationId);
       }
       if (url.pathname === "/reminders/dispatch" && request.method === "POST") {
-        return enrichErrorResponse(await handleDispatchReminders(request, env), correlationId);
+        return enrichErrorResponse(await handleDispatchReminders(request, requestEnv), correlationId);
       }
       if (url.pathname === "/occurrences/complete" && request.method === "POST") {
-        return enrichErrorResponse(await handleCompleteOccurrence(request, env), correlationId);
+        return enrichErrorResponse(await handleCompleteOccurrence(request, requestEnv), correlationId);
       }
       if (url.pathname === "/occurrences/uncomplete" && request.method === "POST") {
-        return enrichErrorResponse(await handleUncompleteOccurrence(request, env), correlationId);
+        return enrichErrorResponse(await handleUncompleteOccurrence(request, requestEnv), correlationId);
       }
 
       return enrichErrorResponse(notFound(), correlationId);
