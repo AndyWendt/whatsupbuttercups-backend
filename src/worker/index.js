@@ -77,6 +77,18 @@ const profilePayload = ({ id, email, displayName, createdAt, firebaseUid }) => (
   },
 });
 
+const householdPayload = ({ household, member }) => {
+  const payload = {
+    household,
+  };
+
+  if (member) {
+    payload.member = member;
+  }
+
+  return payload;
+};
+
 const handleSessionVerify = async (request, env) => {
   const body = await parseJson(request);
   const token = body?.token;
@@ -209,6 +221,53 @@ const handleUpdateProfile = async (request, env) => {
   );
 };
 
+const handleCreateHousehold = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const name = body?.name?.trim?.();
+  if (!name) {
+    return badRequest("name is required");
+  }
+
+  const user = userContext.user;
+  if (typeof env.createHousehold !== "function") {
+    return json(
+      { error: "unavailable", message: "household store is unavailable" },
+      { status: 503 },
+    );
+  }
+
+  if (typeof env.addHouseholdMember !== "function") {
+    return json(
+      { error: "unavailable", message: "membership store is unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const now = new Date().toISOString();
+  const household = await env.createHousehold({
+    id: crypto.randomUUID(),
+    name,
+    creatorUserId: user.id,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const member = await env.addHouseholdMember({
+    householdId: household.id || household.householdId,
+    userId: user.id,
+    role: "admin",
+  });
+
+  return json(
+    householdPayload({ household, member }),
+    { status: 201 },
+  );
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -227,6 +286,13 @@ export default {
 
     if (url.pathname === "/me" && request.method === "PUT") {
       return handleUpdateProfile(request, env);
+    }
+
+    if (
+      (url.pathname === "/household" || url.pathname === "/households") &&
+      request.method === "POST"
+    ) {
+      return handleCreateHousehold(request, env);
     }
 
     return notFound();
