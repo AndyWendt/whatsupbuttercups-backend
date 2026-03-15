@@ -186,4 +186,33 @@ describe("sqlite repository", () => {
     const user = await bound.getProfileByFirebaseUid("uid-a");
     expect(user).not.toBeNull();
   });
+
+  it.each(["DB", "db", "D1", "d1"])(
+    "binds repository methods from env.%s",
+    async (dbKey) => {
+      const db = makeDb();
+      const env = {
+        verifyFirebaseToken: async (token) => {
+          if (token === "token-a") {
+            return { uid: "uid-a", email: "a@example.com" };
+          }
+          throw new Error("invalid token");
+        },
+        [dbKey]: db,
+      };
+      const repo = createRepository(db);
+      await repo.createUser({
+        id: "user-a",
+        firebaseUid: "uid-a",
+        email: "a@example.com",
+      });
+
+      const bound = bindRepositoryToEnv(env);
+      expect(bound).toHaveProperty("createHousehold");
+      expect(typeof bound.getProfileByFirebaseUid).toBe("function");
+
+      const user = await bound.getUserByFirebaseUid("uid-a");
+      expect(user).not.toBeNull();
+    },
+  );
 });
