@@ -28,6 +28,10 @@ const badRequest = (message) =>
   json({ error: "bad_request", message }, { status: 400 });
 const unauthorized = (message) =>
   json({ error: "unauthorized", message }, { status: 401 });
+const forbidden = (message) =>
+  json({ error: "forbidden", message }, { status: 403 });
+const conflict = (message) =>
+  json({ error: "conflict", message }, { status: 409 });
 
 const extractBearerToken = (request) => {
   const header = request.headers.get("authorization");
@@ -268,6 +272,121 @@ const handleCreateHousehold = async (request, env) => {
   );
 };
 
+const ensureHouseholdAdmin = async (env, user, householdId) => {
+  if (typeof env.getHouseholdMembership !== "function") {
+    return { response: json({ error: "unavailable", message: "membership lookup unavailable" }, { status: 503 }) };
+  }
+
+  const membership = await env.getHouseholdMembership(householdId, user.id);
+  if (!membership || membership.role !== "admin") {
+    return { response: forbidden("household admin required") };
+  }
+
+  return { response: null, membership };
+};
+
+const handleCreateInvite = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const householdId = body?.household_id;
+  if (!householdId) {
+    return badRequest("household_id is required");
+  }
+
+  const guard = await ensureHouseholdAdmin(env, userContext.user, householdId);
+  if (guard.response) {
+    return guard.response;
+  }
+
+  if (typeof env.putInviteToken !== "function") {
+    return json(
+      { error: "unavailable", message: "invite store unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const now = new Date().toISOString();
+  const invite = {
+    token: crypto.randomUUID(),
+    household_id: householdId,
+    inviter_user_id: userContext.user.id,
+    invitee_email: body?.invitee_email || null,
+    status: "pending",
+    created_at: now,
+    updated_at: now,
+  };
+  await env.putInviteToken(invite);
+
+  return json({ invite }, { status: 201 });
+};
+
+const handleJoinHousehold = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const token = body?.token;
+  if (!token) {
+    return badRequest("token is required");
+  }
+
+  if (
+    typeof env.getInviteToken !== "function" ||
+    typeof env.markInviteAccepted !== "function" ||
+    typeof env.addHouseholdMember !== "function"
+  ) {
+    return json(
+      { error: "unavailable", message: "invite workflow unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const invite = await env.getInviteToken(token);
+  if (!invite) {
+    return notFound();
+  }
+
+  if (invite.status !== "pending") {
+    return conflict("invite is not pending");
+  }
+
+  if (invite.invitee_email && userContext.user.email && invite.invitee_email !== userContext.user.email) {
+    return forbidden("invite token is bound to a different email");
+  }
+
+  if (typeof env.getHouseholdMembership === "function") {
+    const existingMember = await env.getHouseholdMembership(
+      invite.household_id,
+      userContext.user.id,
+    );
+    if (existingMember) {
+      return conflict("user already belongs to household");
+    }
+  }
+
+  const member = await env.addHouseholdMember({
+    householdId: invite.household_id,
+    userId: userContext.user.id,
+    role: "member",
+  });
+
+  await env.markInviteAccepted(token, {
+    acceptedByUserId: userContext.user.id,
+    acceptedAt: new Date().toISOString(),
+  });
+
+  return json({
+    household_id: invite.household_id,
+    member,
+  }, { status: 201 });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -293,6 +412,15 @@ export default {
       request.method === "POST"
     ) {
       return handleCreateHousehold(request, env);
+    }
+    if (
+      url.pathname === "/household/invites" &&
+      request.method === "POST"
+    ) {
+      return handleCreateInvite(request, env);
+    }
+    if (url.pathname === "/household/join" && request.method === "POST") {
+      return handleJoinHousehold(request, env);
     }
 
     return notFound();
