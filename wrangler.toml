@@ -1,0 +1,13 @@
+name = "whatsupbuttercups-backend"
+main = "src/worker/index.js"
+compatibility_date = "2026-03-14"
+account_id = "001038ef35a949bc64c655cf1a0e3db8"
+routes = [
+  { pattern = "whatsupbuttercups.com", custom_domain = true }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "whatsupbuttercups-backend"
+database_id = "0459c0e7-3586-4953-b26f-4bc5756f2f88"
+migrations_dir = "migrations"
