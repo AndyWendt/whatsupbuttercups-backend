@@ -421,6 +421,129 @@ const handleJoinHousehold = async (request, env) => {
   }, { status: 201 });
 };
 
+const normalizeItemUpdate = (body) => {
+  const updates = {};
+  if (typeof body?.title === "string") {
+    updates.title = body.title.trim();
+  }
+  if (typeof body?.recurrence === "string") {
+    updates.recurrence = body.recurrence;
+  }
+  if (typeof body?.is_active === "boolean") {
+    updates.is_active = body.is_active ? 1 : 0;
+  }
+  return updates;
+};
+
+const requireHouseholdForItem = async (env, user, householdId) => {
+  if (!householdId) {
+    return { response: null };
+  }
+
+  return requireHouseholdMembership(env, user, householdId);
+};
+
+const handleCreateItem = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const title = body?.title?.trim?.();
+  const recurrence = body?.recurrence;
+  const householdId = body?.household_id || null;
+
+  if (!title || !recurrence) {
+    return badRequest("title and recurrence are required");
+  }
+
+  if (typeof env.createItem !== "function") {
+    return json({ error: "unavailable", message: "item store unavailable" }, { status: 503 });
+  }
+
+  const membershipContext = await requireHouseholdForItem(env, userContext.user, householdId);
+  if (membershipContext.response) {
+    return membershipContext.response;
+  }
+
+  const now = new Date().toISOString();
+  const item = await env.createItem({
+    id: crypto.randomUUID(),
+    household_id: householdId,
+    owner_user_id: userContext.user.id,
+    title,
+    recurrence,
+    is_active: 1,
+    created_at: now,
+    updated_at: now,
+  });
+
+  return json({ item }, { status: 201 });
+};
+
+const handleGetItems = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  if (typeof env.listItemsForUser !== "function") {
+    return json({ error: "unavailable", message: "item query unavailable" }, { status: 503 });
+  }
+
+  const items = await env.listItemsForUser(userContext.user.id);
+  return json({ items });
+};
+
+const handlePatchItem = async (request, env, itemId) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  if (typeof env.getItemById !== "function" || typeof env.updateItem !== "function") {
+    return json({ error: "unavailable", message: "item persistence unavailable" }, { status: 503 });
+  }
+
+  const current = await env.getItemById(itemId);
+  if (!current) {
+    return notFound();
+  }
+
+  const body = await parseJson(request);
+  if (!body) {
+    return badRequest("no update body");
+  }
+
+  if (current.owner_user_id !== userContext.user.id) {
+    if (!current.household_id) {
+      return forbidden("item owner required");
+    }
+
+    const membership = await requireHouseholdMembership(
+      env,
+      userContext.user,
+      current.household_id,
+    );
+    if (membership.response) {
+      return membership.response;
+    }
+  }
+
+  const updates = normalizeItemUpdate(body);
+  if (Object.keys(updates).length === 0) {
+    return badRequest("no valid update fields");
+  }
+
+  const now = new Date().toISOString();
+  const next = await env.updateItem(itemId, {
+    ...updates,
+    updated_at: now,
+  });
+  return json({ item: next });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -455,6 +578,19 @@ export default {
     }
     if (url.pathname === "/household/join" && request.method === "POST") {
       return handleJoinHousehold(request, env);
+    }
+    if (url.pathname === "/items" && request.method === "GET") {
+      return handleGetItems(request, env);
+    }
+    if (url.pathname === "/items" && request.method === "POST") {
+      return handleCreateItem(request, env);
+    }
+    if (url.pathname.startsWith("/items/") && request.method === "PATCH") {
+      const itemId = url.pathname.split("/")[2];
+      if (!itemId) {
+        return notFound();
+      }
+      return handlePatchItem(request, env, itemId);
     }
 
     return notFound();
