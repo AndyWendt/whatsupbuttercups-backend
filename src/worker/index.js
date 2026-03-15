@@ -860,6 +860,56 @@ const handleCreateVacation = async (request, env) => {
   return json({ vacation }, { status: 201 });
 };
 
+const handleRegisterDevice = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const deviceToken = body?.device_token?.trim?.();
+  const platform = body?.platform?.trim?.();
+
+  if (!deviceToken || !platform) {
+    return badRequest("device_token and platform are required");
+  }
+
+  if (
+    typeof env.getDeviceRegistrationByToken !== "function" ||
+    typeof env.createDeviceRegistration !== "function" ||
+    typeof env.updateDeviceRegistration !== "function"
+  ) {
+    return json(
+      { error: "unavailable", message: "device registration store unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const existing = await env.getDeviceRegistrationByToken(deviceToken);
+  const now = new Date().toISOString();
+  if (existing) {
+    if (existing.user_id !== userContext.user.id) {
+      return conflict("device token already belongs to another user");
+    }
+
+    const device = await env.updateDeviceRegistration(existing, {
+      platform,
+      updated_at: now,
+    });
+    return json({ device }, { status: 200 });
+  }
+
+  const device = await env.createDeviceRegistration({
+    id: crypto.randomUUID(),
+    userId: userContext.user.id,
+    deviceToken,
+    platform,
+    now,
+  });
+
+  return json({ device }, { status: 201 });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -919,6 +969,9 @@ export default {
     }
     if (url.pathname === "/vacations" && request.method === "POST") {
       return handleCreateVacation(request, env);
+    }
+    if (url.pathname === "/devices/register" && request.method === "POST") {
+      return handleRegisterDevice(request, env);
     }
     if (url.pathname === "/occurrences/complete" && request.method === "POST") {
       return handleCompleteOccurrence(request, env);
