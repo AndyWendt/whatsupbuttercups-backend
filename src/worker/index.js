@@ -1,3 +1,5 @@
+import { expandRecurrence } from "../domain/recurrence.js";
+
 const buildHealthPayload = () => ({
   service: "whatsupbuttercups-backend",
   status: "ok",
@@ -435,6 +437,20 @@ const normalizeItemUpdate = (body) => {
   return updates;
 };
 
+const parseDateParam = (url) => {
+  const date = url.searchParams.get("date");
+  if (!date) {
+    return { value: null, error: badRequest("date query is required") };
+  }
+
+  const parsed = new Date(`${date}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) {
+    return { value: null, error: badRequest("invalid date") };
+  }
+
+  return { value: date, error: null };
+};
+
 const requireHouseholdForItem = async (env, user, householdId) => {
   if (!householdId) {
     return { response: null };
@@ -544,6 +560,46 @@ const handlePatchItem = async (request, env, itemId) => {
   return json({ item: next });
 };
 
+const handleGetAgenda = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  if (typeof env.listItemsForUser !== "function") {
+    return json({ error: "unavailable", message: "item query unavailable" }, { status: 503 });
+  }
+
+  const url = new URL(request.url);
+  const parsedDate = parseDateParam(url);
+  if (parsedDate.error) {
+    return parsedDate.error;
+  }
+
+  const items = await env.listItemsForUser(userContext.user.id);
+  const occurrences = items
+    .filter((item) => Number(item.is_active) !== 0)
+    .filter((item) =>
+      expandRecurrence(
+        item.recurrence,
+        item.created_at?.slice(0, 10) || parsedDate.value,
+        parsedDate.value,
+      ).includes(parsedDate.value),
+    )
+    .map((item) => ({
+      id: item.id,
+      title: item.title,
+      recurrence: item.recurrence,
+      household_id: item.household_id,
+      owner_user_id: item.owner_user_id,
+    }));
+
+  return json({
+    date: parsedDate.value,
+    items: occurrences,
+  });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -591,6 +647,9 @@ export default {
         return notFound();
       }
       return handlePatchItem(request, env, itemId);
+    }
+    if (url.pathname === "/agenda" && request.method === "GET") {
+      return handleGetAgenda(request, env);
     }
 
     return notFound();
