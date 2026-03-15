@@ -1,5 +1,6 @@
 import { expandRecurrence } from "../domain/recurrence.js";
 import { projectWeekProgress } from "../domain/weekProgress.js";
+import { selectDueReminders } from "../domain/reminders.js";
 
 const buildHealthPayload = () => ({
   service: "whatsupbuttercups-backend",
@@ -481,6 +482,20 @@ const parseDateWindow = (body = {}) => {
   return { start, end, error: null };
 };
 
+const parseDateTimeParam = (url, name, fallback) => {
+  const value = url.searchParams.get(name);
+  if (!value) {
+    return { value: fallback, error: null };
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return { value: null, error: badRequest(`${name} must be an ISO timestamp`) };
+  }
+
+  return { value: parsed, error: null };
+};
+
 const overlapsWindow = (candidateStart, candidateEnd, existingStart, existingEnd) =>
   candidateStart <= existingEnd && candidateEnd >= existingStart;
 
@@ -860,6 +875,67 @@ const handleCreateVacation = async (request, env) => {
   return json({ vacation }, { status: 201 });
 };
 
+const handleGetDueReminders = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const url = new URL(request.url);
+  const parsedDateTime = parseDateTimeParam(url, "as_of", new Date());
+  if (parsedDateTime.error) {
+    return parsedDateTime.error;
+  }
+
+  if (
+    typeof env.listItemsForUser !== "function" ||
+    typeof env.listCompletionsForUserInRange !== "function" ||
+    typeof env.getVacationWindowsForUser !== "function"
+  ) {
+    return json(
+      { error: "unavailable", message: "reminder query unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const now = parsedDateTime.value;
+  const dateOnly = now.toISOString().slice(0, 10);
+  const items = await env.listItemsForUser(userContext.user.id);
+  const completions = await env.listCompletionsForUserInRange(
+    userContext.user.id,
+    dateOnly,
+    dateOnly,
+  );
+  const vacations = await env.getVacationWindowsForUser(userContext.user.id);
+  const lastReminderByItem = {};
+
+  if (typeof env.getLastReminderSentAtForItem === "function") {
+    for (const item of items) {
+      const last = await env.getLastReminderSentAtForItem(item.id);
+      if (last) {
+        lastReminderByItem[item.id] = last.sent_at;
+      }
+    }
+  }
+
+  const reminders = selectDueReminders({
+    asOf: now,
+    items,
+    completions,
+    userVacations: vacations,
+    lastReminderByItem,
+    options: {
+      reminderCadenceHours: env.reminderCadenceHours ?? 12,
+      quietHours: env.reminderQuietHours || { start: 22, end: 6 },
+    },
+  });
+
+  return json({
+    due_on: dateOnly,
+    reminders,
+  });
+};
+
 const handleRegisterDevice = async (request, env) => {
   const userContext = await requireUserContext(request, env);
   if (userContext.response) {
@@ -972,6 +1048,9 @@ export default {
     }
     if (url.pathname === "/devices/register" && request.method === "POST") {
       return handleRegisterDevice(request, env);
+    }
+    if (url.pathname === "/reminders/due" && request.method === "GET") {
+      return handleGetDueReminders(request, env);
     }
     if (url.pathname === "/occurrences/complete" && request.method === "POST") {
       return handleCompleteOccurrence(request, env);
