@@ -290,4 +290,44 @@ describe("POST /household/join", () => {
     expect(response.status).toBe(409);
     expect(body.error).toBe("conflict");
   });
+
+  it("allows idempotent join when invite was already accepted by the same user", async () => {
+    const env = makeEnv();
+    const token = "invite-2";
+    env.invites.set(token, {
+      token,
+      household_id: "household-1",
+      inviter_user_id: "user-uid-owner",
+      invitee_email: "joiner@example.com",
+      status: "accepted",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      accepted_by: "user-uid-joiner",
+    });
+    env.householdMembers.set("household-1:user-uid-joiner", {
+      household_id: "household-1",
+      user_id: "user-uid-joiner",
+      role: "member",
+    });
+
+    const request = new Request("https://example.test/household/join", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer joiner-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ token }),
+    });
+    const response = await worker.fetch(request, env);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      household_id: "household-1",
+      member: {
+        role: "member",
+        user_id: "user-uid-joiner",
+      },
+    });
+  });
 });

@@ -392,6 +392,22 @@ const handleJoinHousehold = async (request, env) => {
   }
 
   if (invite.status !== "pending") {
+    if (
+      invite.status === "accepted" &&
+      invite.accepted_by === userContext.user.id
+    ) {
+      const existingMember = await env.getHouseholdMembership(
+        invite.household_id,
+        userContext.user.id,
+      );
+      if (existingMember) {
+        return json({
+          household_id: invite.household_id,
+          member: existingMember,
+        }, { status: 200 });
+      }
+    }
+
     return conflict("invite is not pending");
   }
 
@@ -1000,6 +1016,15 @@ const handleDispatchReminders = async (request, env) => {
   const nowIso = now.toISOString();
   for (const reminder of reminders) {
     const item = items.find((candidate) => candidate.id === reminder.item_id);
+    const dedupeKey = `reminder:${userId}:${reminder.item_id}:${reminder.due_on}`;
+
+    if (typeof env.getNotificationEventByDedupKey === "function") {
+      const existingEvent = await env.getNotificationEventByDedupKey(dedupeKey);
+      if (existingEvent) {
+        continue;
+      }
+    }
+
     const payload = buildReminderPayload({
       item,
       userId,
@@ -1011,6 +1036,7 @@ const handleDispatchReminders = async (request, env) => {
       eventType: "reminder",
       payload: JSON.stringify(payload),
       now: nowIso,
+      dedupeKey,
     });
     events.push({
       ...event,
