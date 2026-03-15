@@ -1,6 +1,7 @@
 import { expandRecurrence } from "../domain/recurrence.js";
 import { projectWeekProgress } from "../domain/weekProgress.js";
 import { selectDueReminders } from "../domain/reminders.js";
+import { buildReminderPayload } from "../domain/notifications.js";
 
 const buildHealthPayload = () => ({
   service: "whatsupbuttercups-backend",
@@ -936,6 +937,100 @@ const handleGetDueReminders = async (request, env) => {
   });
 };
 
+const handleDispatchReminders = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const url = new URL(request.url);
+  const parsedDateTime = parseDateTimeParam(url, "as_of", new Date());
+  if (parsedDateTime.error) {
+    return parsedDateTime.error;
+  }
+
+  const userId = url.searchParams.get("user_id") || userContext.user.id;
+  if (typeof env.listItemsForUser !== "function" ||
+    typeof env.listCompletionsForUserInRange !== "function" ||
+    typeof env.getVacationWindowsForUser !== "function" ||
+    typeof env.createNotificationEvent !== "function" ||
+    typeof env.listDeviceRegistrationsForUser !== "function"
+  ) {
+    return json(
+      { error: "unavailable", message: "reminder dispatch unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const now = parsedDateTime.value;
+  const dateOnly = now.toISOString().slice(0, 10);
+  const items = await env.listItemsForUser(userId);
+  const completions = await env.listCompletionsForUserInRange(
+    userId,
+    dateOnly,
+    dateOnly,
+  );
+  const vacations = await env.getVacationWindowsForUser(userId);
+  const deviceRegistrations = await env.listDeviceRegistrationsForUser(userId);
+  const devices = deviceRegistrations.map((row) => row.device_token);
+  const lastReminderByItem = {};
+
+  if (typeof env.getLastReminderSentAtForItem === "function") {
+    for (const item of items) {
+      const last = await env.getLastReminderSentAtForItem(item.id);
+      if (last) {
+        lastReminderByItem[item.id] = last.sent_at;
+      }
+    }
+  }
+
+  const reminders = selectDueReminders({
+    asOf: now,
+    items,
+    completions,
+    userVacations: vacations,
+    lastReminderByItem,
+    options: {
+      reminderCadenceHours: env.reminderCadenceHours ?? 12,
+      quietHours: env.reminderQuietHours || { start: 22, end: 6 },
+    },
+  });
+
+  const events = [];
+  const nowIso = now.toISOString();
+  for (const reminder of reminders) {
+    const item = items.find((candidate) => candidate.id === reminder.item_id);
+    const payload = buildReminderPayload({
+      item,
+      userId,
+      dueOn: reminder.due_on,
+    });
+    const event = await env.createNotificationEvent({
+      userId,
+      itemId: reminder.item_id,
+      eventType: "reminder",
+      payload: JSON.stringify(payload),
+      now: nowIso,
+    });
+    events.push({
+      ...event,
+      push_targets: devices.length,
+      payload,
+    });
+
+    if (typeof env.sendPushNotification === "function") {
+      for (const token of devices) {
+        await env.sendPushNotification(token, payload);
+      }
+    }
+  }
+
+  return json({
+    dispatched: events.length,
+    events,
+  });
+};
+
 const handleRegisterDevice = async (request, env) => {
   const userContext = await requireUserContext(request, env);
   if (userContext.response) {
@@ -1051,6 +1146,9 @@ export default {
     }
     if (url.pathname === "/reminders/due" && request.method === "GET") {
       return handleGetDueReminders(request, env);
+    }
+    if (url.pathname === "/reminders/dispatch" && request.method === "POST") {
+      return handleDispatchReminders(request, env);
     }
     if (url.pathname === "/occurrences/complete" && request.method === "POST") {
       return handleCompleteOccurrence(request, env);
