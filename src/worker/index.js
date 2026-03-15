@@ -466,6 +466,24 @@ const parseStartDateParam = (url) => {
   return { value: date, error: null };
 };
 
+const parseDateWindow = (body = {}) => {
+  const start = parseDateOnly(body.starts_at);
+  const end = parseDateOnly(body.ends_at);
+
+  if (!start || !end) {
+    return { start: null, end: null, error: badRequest("starts_at and ends_at are required") };
+  }
+
+  if (end < start) {
+    return { start: null, end: null, error: badRequest("ends_at must be on or after starts_at") };
+  }
+
+  return { start, end, error: null };
+};
+
+const overlapsWindow = (candidateStart, candidateEnd, existingStart, existingEnd) =>
+  candidateStart <= existingEnd && candidateEnd >= existingStart;
+
 const requireHouseholdForItem = async (env, user, householdId) => {
   if (!householdId) {
     return { response: null };
@@ -783,6 +801,65 @@ const handleGetWeek = async (request, env) => {
   });
 };
 
+const handleGetVacations = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  if (typeof env.listVacationWindowsForUser !== "function") {
+    return json(
+      { error: "unavailable", message: "vacation store unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const windows = await env.listVacationWindowsForUser(userContext.user.id);
+  return json({ windows });
+};
+
+const handleCreateVacation = async (request, env) => {
+  const userContext = await requireUserContext(request, env);
+  if (userContext.response) {
+    return userContext.response;
+  }
+
+  const body = await parseJson(request);
+  const parsed = parseDateWindow(body);
+  if (parsed.error) {
+    return parsed.error;
+  }
+
+  if (
+    typeof env.listVacationWindowsForUser !== "function" ||
+    typeof env.createVacationWindow !== "function"
+  ) {
+    return json(
+      { error: "unavailable", message: "vacation workflow unavailable" },
+      { status: 503 },
+    );
+  }
+
+  const existing = await env.listVacationWindowsForUser(userContext.user.id);
+  const conflictWindow = existing.find((window) =>
+    overlapsWindow(parsed.start, parsed.end, window.starts_at, window.ends_at),
+  );
+  if (conflictWindow) {
+    return conflict("vacation window overlaps existing window");
+  }
+
+  const now = new Date().toISOString();
+  const vacation = await env.createVacationWindow({
+    id: crypto.randomUUID(),
+    userId: userContext.user.id,
+    startsAt: parsed.start,
+    endsAt: parsed.end,
+    now,
+  });
+
+  return json({ vacation }, { status: 201 });
+};
+
 export default {
   async fetch(request, env = {}) {
     const url = new URL(request.url);
@@ -836,6 +913,12 @@ export default {
     }
     if (url.pathname === "/week" && request.method === "GET") {
       return handleGetWeek(request, env);
+    }
+    if (url.pathname === "/vacations" && request.method === "GET") {
+      return handleGetVacations(request, env);
+    }
+    if (url.pathname === "/vacations" && request.method === "POST") {
+      return handleCreateVacation(request, env);
     }
     if (url.pathname === "/occurrences/complete" && request.method === "POST") {
       return handleCompleteOccurrence(request, env);
